@@ -360,7 +360,11 @@ const AssistantBubble: React.FC<{
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
-const ChatAssistantPage: React.FC = () => {
+interface ChatAssistantPageProps {
+  onNavigate?: (page: 'ingest-kb') => void;
+}
+
+const ChatAssistantPage: React.FC<ChatAssistantPageProps> = ({ onNavigate }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -536,10 +540,21 @@ const ChatAssistantPage: React.FC = () => {
               {sessionId && <span style={{ marginLeft: 8, color: '#16a34a' }}>● {sessionId.slice(0, 8)}…</span>}
             </div>
           </div>
-          <button onClick={clearChat} disabled={isStreaming}
-            style={{ fontSize: 12, color: '#6b7280', background: 'none', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
-            Clear
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {onNavigate && (
+              <button onClick={() => onNavigate('ingest-kb')}
+                style={{ fontSize: 12, color: '#15803d', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                </svg>
+                Ingest KB
+              </button>
+            )}
+            <button onClick={clearChat} disabled={isStreaming}
+              style={{ fontSize: 12, color: '#6b7280', background: 'none', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+              Clear
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
