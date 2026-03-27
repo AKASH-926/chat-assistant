@@ -52,6 +52,9 @@ interface CourseCardData {
   suggested_price: number;
   currency: string;
   thumbnail_query: string;
+  thumbnail?: string;         // base64 AI-generated thumbnail (when available)
+  thumbnailMime?: string;     // mime type for the base64 thumbnail
+  thumbnailLoading?: boolean; // true while thumbnail is still generating
   total_sections: number;
   total_lessons: number;
 }
@@ -118,9 +121,99 @@ const Spinner: React.FC<{ color?: string; size?: number }> = ({ color = '#16a34a
   </svg>
 );
 
+// ─── Course creation wizard ───────────────────────────────────────────────────
+interface WizardQuestion {
+  field: string;
+  question: string;
+  options: string[];
+  allowCustom: boolean;
+  customPlaceholder?: string;
+}
+
+
+function buildCoursePrompt(answers: Record<string, string>): string {
+  const parts: string[] = [];
+  if (answers.topic) parts.push(`Course topic: ${answers.topic}`);
+  if (answers.audience) parts.push(`Target audience: ${answers.audience}`);
+  if (answers.difficulty) parts.push(`Difficulty: ${answers.difficulty}`);
+  if (answers.access) parts.push(`Content security: ${answers.access.startsWith('Encrypted') ? 'encrypted' : 'unencrypted'}`);
+  if (answers.pricing) parts.push(`Pricing: ${answers.pricing === 'Free' ? 'free' : `paid at ${answers.pricing}`}`);
+  return parts.join('. ') + '.';
+}
+
+const CourseWizard: React.FC<{ onComplete: (msg: string) => void; onClose: () => void; fields: WizardQuestion[] }> = ({ onComplete, onClose, fields }) => {
+  const questions = fields;
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState('');
+  const q = questions[step];
+  const isLast = step === questions.length - 1;
+
+  const handleSelect = (value: string) => {
+    const next = { ...answers, [q.field]: value };
+    setCustom('');
+    if (isLast) { onComplete(buildCoursePrompt(next)); }
+    else { setAnswers(next); setStep(s => s + 1); }
+  };
+
+  const handleCustomSubmit = () => { if (custom.trim()) handleSelect(custom.trim()); };
+
+  if (!q) return null;
+
+  return (
+    <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 2px 16px rgba(0,0,0,0.08)', overflow: 'hidden', border: '1px solid #e5e7eb' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px 16px' }}>
+          <span style={{ fontSize: 16, fontWeight: 600, color: '#111827' }}>{q.question}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#9ca3af' }}>
+              <button onClick={() => step > 0 && setStep(s => s - 1)} disabled={step === 0} style={{ background: 'none', border: 'none', padding: '2px 4px', cursor: step > 0 ? 'pointer' : 'default', color: step > 0 ? '#6b7280' : '#d1d5db', display: 'flex', alignItems: 'center' }}>
+                <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='15 18 9 12 15 6'/></svg>
+              </button>
+              <span>{step + 1} of {questions.length}</span>
+              <span style={{ color: '#d1d5db', display: 'flex', alignItems: 'center' }}>
+                <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><polyline points='9 18 15 12 9 6'/></svg>
+              </span>
+            </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 18, lineHeight: 1, padding: 0 }}>×</button>
+          </div>
+        </div>
+
+        {/* Options */}
+        <div style={{ padding: '0 16px' }}>
+          {q.options.map((opt, i) => (
+            <button key={opt} onClick={() => handleSelect(opt)} style={{ display: 'flex', alignItems: 'center', gap: 14, width: '100%', padding: '13px 12px', marginBottom: 4, background: 'none', border: 'none', borderRadius: 10, cursor: 'pointer', textAlign: 'left', fontSize: 14, color: '#111827', transition: 'background 0.1s' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+              <span style={{ width: 26, height: 26, borderRadius: 8, background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, color: '#6b7280', flexShrink: 0 }}>{i + 1}</span>
+              {opt}
+            </button>
+          ))}
+        </div>
+
+        {/* Custom input */}
+        {q.allowCustom && (
+          <div style={{ margin: '8px 16px 0', display: 'flex', alignItems: 'center', gap: 8, background: '#f9fafb', borderRadius: 10, padding: '10px 12px', border: '1px solid #f3f4f6' }}>
+            <svg width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='#9ca3af' strokeWidth='2'><path d='M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7'/><path d='M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z'/></svg>
+            <input value={custom} onChange={e => setCustom(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCustomSubmit()}
+              placeholder={q.customPlaceholder ?? 'Type a custom answer…'}
+              style={{ flex: 1, border: 'none', background: 'transparent', outline: 'none', fontSize: 14, color: '#111827', fontFamily: 'inherit' }} />
+            <button onClick={handleCustomSubmit} disabled={!custom.trim()}
+              style={{ width: 28, height: 28, borderRadius: '50%', background: custom.trim() ? '#4f46e5' : '#e5e7eb', border: 'none', cursor: custom.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
+              <svg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='#fff' strokeWidth='2.5' strokeLinecap='round' strokeLinejoin='round'><line x1='12' y1='19' x2='12' y2='5'/><polyline points='5 12 12 5 19 12'/></svg>
+            </button>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div style={{ padding: '12px 24px', textAlign: 'center', fontSize: 12, color: '#9ca3af' }}>Uses AI. Verify result.</div>
+    </div>
+  );
+};
+
 // ─── Tool activity feed ───────────────────────────────────────────────────────
 function toolSummary(ev: ToolEvent): string {
-  return ev.arguments?.title ?? ev.arguments?.name ?? '';
+  return ev.arguments?.title ?? ev.arguments?.name ?? ev.arguments?.query ?? ev.arguments?.prompt ?? '';
 }
 
 const ToolFeed: React.FC<{ events: ToolEvent[]; done: boolean }> = ({ events, done }) => {
@@ -179,9 +272,12 @@ const PreviewPanel: React.FC<{
   const [learnystLoading, setLearnystLoading] = useState(false);
   const [learnystError, setLearnystError] = useState('');
   const PLACEHOLDER = 'https://blogcdn.visionias.in/wp-content-prod/2024/03/20.-UPSC-Mains-GS-2-Syllabus-and-PYQs-Trends-2.webp';
-  const thumbSrc = card.thumbnail_query
-    ? `https://source.unsplash.com/640x300/?${encodeURIComponent(card.thumbnail_query)}`
-    : PLACEHOLDER;
+  const thumbSrc = card.thumbnail
+    ? `data:${card.thumbnailMime ?? 'image/png'};base64,${card.thumbnail}`
+    : card.thumbnail_query
+      ? `https://source.unsplash.com/640x300/?${encodeURIComponent(card.thumbnail_query)}`
+      : PLACEHOLDER;
+  const thumbLoading = card.thumbnailLoading && !card.thumbnail;
   const currency = card.currency === 'INR' ? '₹' : card.currency;
 
   // Reset status when card changes
@@ -234,10 +330,16 @@ const PreviewPanel: React.FC<{
       {/* Scrollable content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 0 16px' }}>
         {/* Thumbnail */}
-        <div style={{ height: 180, background: '#f3f4f6', overflow: 'hidden', flexShrink: 0 }}>
-          <img src={thumbSrc} alt={card.title}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        <div style={{ height: 180, background: '#f3f4f6', overflow: 'hidden', flexShrink: 0, position: 'relative' }}>
+          <img src={thumbLoading ? PLACEHOLDER : thumbSrc} alt={card.title}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', filter: thumbLoading ? 'blur(8px)' : 'none', transform: thumbLoading ? 'scale(1.05)' : 'none', transition: 'filter 0.4s, transform 0.4s' }}
             onError={e => { (e.target as HTMLImageElement).src = PLACEHOLDER; }} />
+          {thumbLoading && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, background: 'rgba(0,0,0,0.25)' }}>
+              <Spinner />
+              <span style={{ color: '#fff', fontSize: 12, fontWeight: 600, letterSpacing: 0.3 }}>Generating thumbnail…</span>
+            </div>
+          )}
         </div>
 
         <div style={{ padding: '16px 16px 0' }}>
@@ -330,10 +432,25 @@ const AssistantBubble: React.FC<{
   onShowPreview: (card: CourseCardData) => void;
 }> = ({ msg, onShowPreview }) => {
   const html = useMemo(() => renderMarkdown(msg.content), [msg.content]);
-  const showThinking = !msg.courseCard && msg.toolEvents.length === 0 && !msg.content;
+  const showThinking = !msg.courseCard && !msg.content && !msg.done;
+  const toolsDoneNoText = msg.toolEvents.length > 0 && !msg.content && !msg.done;
   return (
     <div style={{ maxWidth: '100%' }}>
       <ToolFeed events={msg.toolEvents} done={msg.done} />
+      {msg.error ? (
+        <div style={{ fontSize: 14, color: '#dc2626', whiteSpace: 'pre-wrap', marginTop: 6 }}>{msg.content}</div>
+      ) : msg.content ? (
+        <div style={{ fontSize: 14, color: '#111827', wordBreak: 'break-word' }}
+          dangerouslySetInnerHTML={{ __html: html }} />
+      ) : showThinking || toolsDoneNoText ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0' }}>
+          <style>{`@keyframes aui-bounce { 0%,80%,100%{transform:scale(0.6);opacity:0.4} 40%{transform:scale(1);opacity:1} }`}</style>
+          {[0, 160, 320].map(delay => (
+            <span key={delay} style={{ width: 7, height: 7, borderRadius: '50%', background: '#9ca3af', display: 'inline-block', animation: `aui-bounce 1.2s ease-in-out ${delay}ms infinite` }} />
+          ))}
+          <span style={{ color: '#9ca3af', fontSize: 13, marginLeft: 2 }}>{toolsDoneNoText ? 'Writing response…' : 'Thinking…'}</span>
+        </div>
+      ) : null}
       {msg.courseCard && <CourseCardPill card={msg.courseCard} onClick={() => onShowPreview(msg.courseCard!)} />}
       {msg.coursePayload && msg.done && (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 12, color: '#6b7280' }}>
@@ -341,20 +458,6 @@ const AssistantBubble: React.FC<{
           Course payload ready — use the Preview panel to publish
         </div>
       )}
-      {msg.error ? (
-        <div style={{ fontSize: 14, color: '#dc2626', whiteSpace: 'pre-wrap', marginTop: 6 }}>{msg.content}</div>
-      ) : msg.content ? (
-        <div style={{ fontSize: 14, color: '#111827', wordBreak: 'break-word', marginTop: msg.courseCard ? 8 : 0 }}
-          dangerouslySetInnerHTML={{ __html: html }} />
-      ) : showThinking ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0' }}>
-          <style>{`@keyframes aui-bounce { 0%,80%,100%{transform:scale(0.6);opacity:0.4} 40%{transform:scale(1);opacity:1} }`}</style>
-          {[0, 160, 320].map(delay => (
-            <span key={delay} style={{ width: 7, height: 7, borderRadius: '50%', background: '#9ca3af', display: 'inline-block', animation: `aui-bounce 1.2s ease-in-out ${delay}ms infinite` }} />
-          ))}
-          <span style={{ color: '#9ca3af', fontSize: 13, marginLeft: 2 }}>Thinking…</span>
-        </div>
-      ) : null}
     </div>
   );
 };
@@ -364,6 +467,8 @@ const ChatAssistantPage: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardFields, setWizardFields] = useState<WizardQuestion[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pageContext, setPageContext] = useState<PageResource[] | null>(null);
 
@@ -404,7 +509,7 @@ const ChatAssistantPage: React.FC = () => {
         {
           query: `subscription AdminAssistantChat($message: String!, $messageId: String!, $sessionId: String, $resources: [PageResource!]) {
             adminAssistantChat(message: $message, messageId: $messageId, sessionId: $sessionId, resources: $resources) {
-              type text intent confidence sessionId message done workflowId workflowType status label workflows tool input result preview
+              type text intent confidence sessionId message done workflowId workflowType status label workflows tool toolId toolDisplayName input result preview clarificationFields
             }
           }`,
           variables: { message: text, messageId, sessionId: currentSessionId, ...(ctx ? { resources: ctx } : {}) },
@@ -413,7 +518,7 @@ const ChatAssistantPage: React.FC = () => {
           next: ({ data }: any) => {
             const event = data?.adminAssistantChat;
             if (!event) return;
-            const { type, text: txt, sessionId: evtSessionId, message: msgPayload, done: evtDone, preview: previewData, tool: toolName, input: toolInput, result: toolResult } = event;
+            const { type, text: txt, sessionId: evtSessionId, message: msgPayload, done: evtDone, preview: previewData, tool: toolName, toolId, toolDisplayName, input: toolInput, result: toolResult, clarificationFields: evtClarificationFields } = event;
             if (evtDone) {
               updateMsg(assistantId, () => ({ done: true }));
             } else if (type === 'text_chunk' && txt) {
@@ -437,15 +542,21 @@ const ChatAssistantPage: React.FC = () => {
                 suggested_price: d.price ?? d.suggested_price ?? 0,
                 currency: d.currency ?? 'INR',
                 thumbnail_query: d.thumbnail_query ?? d.title ?? '',
+                thumbnail: d.thumbnail ?? undefined,
+                thumbnailMime: d.thumbnailMime ?? 'image/png',
+                thumbnailLoading: d.thumbnailLoading ?? false,
                 total_sections: sections.length,
                 total_lessons: totalLessons,
               };
               updateMsg(assistantId, () => ({ courseCard: card }));
               showPreview(card, assistantId);
             } else if (type === 'tool_start' && toolName) {
-              updateMsg(assistantId, m => ({ toolEvents: [...m.toolEvents, { type: 'tool_start', tool_name: toolName, arguments: toolInput }] }));
-            } else if (type === 'tool_result' && toolName) {
-              updateMsg(assistantId, m => ({ toolEvents: [...m.toolEvents, { type: 'tool_result', tool_name: toolName, result: toolResult }] }));
+              updateMsg(assistantId, m => ({ toolEvents: [...m.toolEvents, { type: 'tool_start' as const, tool_call_id: toolId ?? toolName, tool_name: toolName, display_name: toolDisplayName ?? toolName, arguments: toolInput }] }));
+            } else if ((type === 'tool_complete' || type === 'tool_result') && toolName) {
+              updateMsg(assistantId, m => ({ toolEvents: [...m.toolEvents, { type: 'tool_result' as const, tool_call_id: toolId ?? toolName, tool_name: toolName, success: !toolResult?.error, summary: toolResult?.error ?? undefined }] }));
+            } else if (type === 'clarification' && evtClarificationFields?.length > 0) {
+              setWizardFields(evtClarificationFields as WizardQuestion[]);
+              setWizardOpen(true);
             }
           },
           error: (err: any) => {
@@ -490,8 +601,7 @@ const ChatAssistantPage: React.FC = () => {
     if (previewMsgId) updateMsg(previewMsgId, () => ({ courseCreated: true }));
   }, [previewMsgId, updateMsg]);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const sendText = useCallback(async (text: string) => {
     if (!text || isStreaming) return;
     const userId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
@@ -499,7 +609,6 @@ const ChatAssistantPage: React.FC = () => {
       { id: userId, role: 'user', content: text, toolEvents: [], done: true },
       { id: assistantId, role: 'assistant', content: '', toolEvents: [], done: false },
     ]);
-    setInput('');
     setIsStreaming(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -511,7 +620,14 @@ const ChatAssistantPage: React.FC = () => {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [input, isStreaming, streamChat, updateMsg, sessionId, pageContext]);
+  }, [isStreaming, streamChat, updateMsg, sessionId, pageContext]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    await sendText(text);
+  }, [input, sendText]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -526,7 +642,7 @@ const ChatAssistantPage: React.FC = () => {
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'DM Sans, sans-serif', background: '#fff', overflow: 'hidden' }}>
 
       {/* ── Chat pane ── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: panelMounted ? '1px solid #e5e7eb' : 'none' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: panelMounted ? '1px solid #e5e7eb' : 'none', position: 'relative' }}>
         {/* Header */}
         <div style={{ borderBottom: '1px solid #e5e7eb', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div>
@@ -614,6 +730,19 @@ const ChatAssistantPage: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Course Wizard — floats over the composer, anchored to the bottom */}
+        {wizardOpen && (
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 20, padding: '0 20px 16px' }}>
+            <div style={{ maxWidth: 680, margin: '0 auto' }}>
+              <CourseWizard
+                fields={wizardFields}
+                onComplete={(msg) => { setWizardOpen(false); setWizardFields([]); sendText(msg); }}
+                onClose={() => { setWizardOpen(false); setWizardFields([]); }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Preview pane (slide in from right) ── */}
