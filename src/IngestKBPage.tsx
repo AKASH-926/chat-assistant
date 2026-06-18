@@ -1,14 +1,30 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 // ─── API config ───────────────────────────────────────────────────────────────
-const GRAPHQL_API = 'http://localhost:3001/admin-ai';
-const AUTH_TOKEN = `Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOlsxNzcwMDk4NjAwLCIxNzcwMDI0NjYzIl0sImV4cCI6MTgwMTYzNDYwMCwiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsInNjaG9vbF9pZCI6MTUyNDMyLCJsZXNzb25faWQiOjQ2MTM4NTgsInVzZXJfaWQiOjkwODIyMSwidXNlcl9uYW1lIjoiYWthc2grYm90MiIsImlzX2FpX2NoYXRfYXZhaWxhYmxlIjp0cnVlLCJ0eXAiOiJKV1QiLCJpc3NydiI6dHJ1ZX0.PgPMTN_w0tCGCrsxNjNrqED3fzWcFovBqfT9i0byNIc`;
+
+const isLocalHost = false
+const API_BASE_URL = isLocalHost ? 'http://localhost:3001' : 'https://ai-api-dev.learnyst.com';
+const GRAPHQL_API = `${API_BASE_URL}/admin-ai`;
+const AUTH_TOKEN = `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjc5MzA0MTcsInNpZCI6MTUyNDMyLCJleHAiOjE4MDg2NDA1ODUsInR5cCI6NCwibG9rIjoiMDAwMCIsImlzQWRtaW4iOnRydWUsInRvayI6IjdCSmtPaWRudXlDU3BkcXFVdmwtS3ciLCJ0aW1lIjoxNzc2ODQ1Mzg1fQ.l6nz7zafs82h08DmE9rKmh5nmls5bIef3sTR_GUWDu4`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface IngestResult {
   jobId: string;
   status: string;
 }
+
+interface KbArticle {
+  id: number;
+  slug: string;
+  category: string;
+  description: string;
+  ingestionStatus: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const PAGE_SIZE = 10;
 
 // ─── Animations (injected once) ───────────────────────────────────────────────
 const styleTag = document.createElement('style');
@@ -100,7 +116,7 @@ function CrawlProgress() {
 }
 
 // ─── Result card ──────────────────────────────────────────────────────────────
-function ResultCard({ result, isError }: { result: IngestResult | null; isError?: boolean }) {
+function ResultCard({ result, isError, onRefresh, refreshing }: { result: IngestResult | null; isError?: boolean; onRefresh?: () => void; refreshing?: boolean }) {
   if (!result && !isError) return null;
 
   if (isError) {
@@ -150,27 +166,81 @@ function ResultCard({ result, isError }: { result: IngestResult | null; isError?
           <span style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Status</span>
           <span style={{
             fontSize: 12, fontWeight: 600, padding: '2px 10px', borderRadius: 99,
-            background: '#dcfce7', color: '#15803d', letterSpacing: '0.04em', textTransform: 'uppercase',
+            background: (() => { const s = result!.status.toLowerCase(); return s === 'completed' ? '#dcfce7' : s === 'failed' ? '#fee2e2' : s === 'in_progress' ? '#fef3c7' : '#f3f4f6'; })(),
+            color: (() => { const s = result!.status.toLowerCase(); return s === 'completed' ? '#15803d' : s === 'failed' ? '#dc2626' : s === 'in_progress' ? '#92400e' : '#6b7280'; })(),
+            letterSpacing: '0.04em', textTransform: 'uppercase',
           }}>
             {result!.status}
           </span>
         </div>
       </div>
+
+      {/* Refresh Status button */}
+      {onRefresh && (
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          style={{
+            marginTop: 16, width: '100%', padding: '10px 0',
+            background: 'none', border: '1.5px solid #d1fae5', borderRadius: 10,
+            fontSize: 13, fontWeight: 600, color: '#15803d',
+            cursor: refreshing ? 'default' : 'pointer',
+            fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            transition: 'all 0.15s', opacity: refreshing ? 0.6 : 1,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+            style={{ animation: refreshing ? 'kb-spin 0.8s linear infinite' : 'none' }}>
+            <path d="M21.5 2v6h-6M2.5 22v-6h6" />
+            <path d="M2.5 11.5a10 10 0 0 1 18.37-4.5M21.5 12.5a10 10 0 0 1-18.37 4.5" />
+          </svg>
+          {refreshing ? 'Checking…' : 'Refresh Status'}
+        </button>
+      )}
     </div>
   );
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
-interface IngestKBPageProps {
-  onBack: () => void;
-}
 
-export default function IngestKBPage({ onBack }: IngestKBPageProps) {
+export default function IngestKBPage() {
+  const navigate = useNavigate();
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<IngestResult | null>(null);
   const [isError, setIsError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [articles, setArticles] = useState<KbArticle[]>([]);
+  const [articlesLoading, setArticlesLoading] = useState(false);
+  const [articlesTotal, setArticlesTotal] = useState(0);
+  const [articlesPage, setArticlesPage] = useState(1);
+  const [articlesHasMore, setArticlesHasMore] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const fetchArticles = useCallback(async (page = 1) => {
+    setArticlesLoading(true);
+    try {
+      const res = await fetch(GRAPHQL_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': AUTH_TOKEN },
+        body: JSON.stringify({
+          query: `query KbArticles($limit: Int, $page: Int) { kbArticles(limit: $limit, page: $page) { items { id slug category description ingestionStatus createdAt updatedAt } total hasMore } }`,
+          variables: { limit: PAGE_SIZE, page },
+        }),
+      });
+      const json = await res.json();
+      const data = json.data?.kbArticles;
+      if (data) {
+        setArticles(data.items);
+        setArticlesTotal(data.total);
+        setArticlesHasMore(data.hasMore);
+        setArticlesPage(page);
+      }
+    } catch { /* ignore */ }
+    finally { setArticlesLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchArticles(); }, [fetchArticles]);
 
   const isValidUrl = (() => {
     try { new URL(url); return true; } catch { return false; }
@@ -205,10 +275,49 @@ export default function IngestKBPage({ onBack }: IngestKBPageProps) {
       const data = json.data?.crawlAndIngestKb;
       if (!data) throw new Error('Empty response');
       setResult(data);
+      fetchArticles();
     } catch {
       setIsError(true);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleRefreshStatus() {
+    if (!result?.jobId || refreshing) return;
+    setRefreshing(true);
+    try {
+      // Derive slug from the ingested URL (last path segment, without trailing slash)
+      const slug = new URL(url).pathname.replace(/\/+$/, '').split('/').pop() || '';
+      if (!slug) return;
+      const res = await fetch(GRAPHQL_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': AUTH_TOKEN,
+        },
+        body: JSON.stringify({
+          query: `query KbIngestionStatus($slug: String!) {
+            kbIngestionStatus(slug: $slug) {
+              id slug status errorReason createdAt updatedAt
+            }
+          }`,
+          variables: { slug },
+        }),
+      });
+      const json = await res.json();
+      if (json.errors?.length) throw new Error(json.errors[0].message);
+      const data = json.data?.kbIngestionStatus;
+      if (data) {
+        setResult({ jobId: result.jobId, status: data.status });
+      } else {
+        // Record not yet created by the worker — still queued
+        setResult({ jobId: result.jobId, status: 'QUEUED' });
+      }
+    } catch {
+      // silently fail — keep showing the last known status
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -236,7 +345,7 @@ export default function IngestKBPage({ onBack }: IngestKBPageProps) {
       }}>
         <button
           className="kb-back-btn"
-          onClick={onBack}
+          onClick={() => navigate('/')}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
             fontSize: 13, color: '#6b7280', background: 'none',
@@ -359,13 +468,136 @@ export default function IngestKBPage({ onBack }: IngestKBPageProps) {
 
             {/* Progress / Result */}
             {loading && <CrawlProgress />}
-            {!loading && <ResultCard result={result} isError={isError} />}
+            {!loading && <ResultCard result={result} isError={isError} onRefresh={result ? handleRefreshStatus : undefined} refreshing={refreshing} />}
           </div>
 
           {/* Helper text */}
           <p style={{ fontSize: 12, color: '#9ca3af', marginTop: 20, lineHeight: 1.6, textAlign: 'center' }}>
             The crawler will follow links within the same domain. Large sites may take several minutes to fully index.
           </p>
+
+          {/* ── Ingested articles list ── */}
+          <div style={{ marginTop: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: '#111827', margin: 0 }}>Ingested Articles</h2>
+                {articlesTotal > 0 && (
+                  <span style={{ fontSize: 12, color: '#9ca3af' }}>{articlesTotal} total</span>
+                )}
+              </div>
+              <button
+                onClick={() => fetchArticles(articlesPage)}
+                disabled={articlesLoading}
+                style={{
+                  fontSize: 12, color: '#6b7280', background: 'none', border: '1px solid #e5e7eb',
+                  borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', gap: 5, opacity: articlesLoading ? 0.5 : 1,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                  style={{ animation: articlesLoading ? 'kb-spin 0.8s linear infinite' : 'none' }}>
+                  <path d="M21.5 2v6h-6M2.5 22v-6h6" />
+                  <path d="M2.5 11.5a10 10 0 0 1 18.37-4.5M21.5 12.5a10 10 0 0 1-18.37 4.5" />
+                </svg>
+                Refresh
+              </button>
+            </div>
+
+            {articlesLoading && articles.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: '#9ca3af', fontSize: 13 }}>Loading…</div>
+            )}
+
+            {!articlesLoading && articles.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: '#9ca3af', fontSize: 13 }}>No articles ingested yet.</div>
+            )}
+
+            {articles.length > 0 && (
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
+                {/* Table header */}
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '1fr auto auto',
+                  padding: '10px 16px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb',
+                  fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em',
+                }}>
+                  <span>Slug</span>
+                  <span style={{ textAlign: 'center', minWidth: 90 }}>Status</span>
+                  <span style={{ textAlign: 'right', minWidth: 120 }}>Updated</span>
+                </div>
+
+                {/* Rows */}
+                {articles.map((a, i) => {
+                  const s = (a.ingestionStatus ?? '').toLowerCase();
+                  const statusBg = s === 'completed' ? '#dcfce7' : s === 'failed' ? '#fee2e2' : s === 'in_progress' ? '#fef3c7' : '#f3f4f6';
+                  const statusColor = s === 'completed' ? '#15803d' : s === 'failed' ? '#dc2626' : s === 'in_progress' ? '#92400e' : '#6b7280';
+                  return (
+                    <div key={a.id} style={{
+                      display: 'grid', gridTemplateColumns: '1fr auto auto', alignItems: 'center',
+                      padding: '12px 16px', borderBottom: i < articles.length - 1 ? '1px solid #f3f4f6' : 'none',
+                      background: '#fff',
+                    }}>
+                      <div style={{ overflow: 'hidden' }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {a.slug}
+                        </div>
+                        {a.category && (
+                          <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>{a.category}</div>
+                        )}
+                      </div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 99,
+                        background: statusBg, color: statusColor, textTransform: 'uppercase', letterSpacing: '0.04em',
+                        textAlign: 'center', minWidth: 90,
+                      }}>
+                        {a.ingestionStatus ?? '—'}
+                      </span>
+                      <span style={{ fontSize: 12, color: '#9ca3af', textAlign: 'right', minWidth: 120 }}>
+                        {new Date(a.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Pagination */}
+            {articlesTotal > PAGE_SIZE && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 }}>
+                <button
+                  onClick={() => fetchArticles(articlesPage - 1)}
+                  disabled={articlesPage <= 1 || articlesLoading}
+                  style={{
+                    fontSize: 13, fontWeight: 500, color: articlesPage <= 1 ? '#d1d5db' : '#374151',
+                    background: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 14px',
+                    cursor: articlesPage <= 1 ? 'default' : 'pointer', fontFamily: 'inherit',
+                    display: 'flex', alignItems: 'center', gap: 4, opacity: articlesLoading ? 0.5 : 1,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
+                  Previous
+                </button>
+                <span style={{ fontSize: 13, color: '#6b7280' }}>
+                  Page {articlesPage} of {Math.ceil(articlesTotal / PAGE_SIZE)}
+                </span>
+                <button
+                  onClick={() => fetchArticles(articlesPage + 1)}
+                  disabled={!articlesHasMore || articlesLoading}
+                  style={{
+                    fontSize: 13, fontWeight: 500, color: !articlesHasMore ? '#d1d5db' : '#374151',
+                    background: 'none', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 14px',
+                    cursor: !articlesHasMore ? 'default' : 'pointer', fontFamily: 'inherit',
+                    display: 'flex', alignItems: 'center', gap: 4, opacity: articlesLoading ? 0.5 : 1,
+                  }}
+                >
+                  Next
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
